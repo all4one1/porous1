@@ -1,0 +1,16 @@
+incrT = 10
+nx = 30
+ny = 600
+nz = 20
+Lx = 0.006
+!Lx = 0.3
+Ly = 0.012
+Lz = 0.006
+tau = 0.02
+read_recovery = 0
+minimumTime = 100000
+dimensionless = 0
+StopIncr = 10000
+T_hot = 25
+T_cold = 15
+!Ra = 200
