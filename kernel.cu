@@ -23,7 +23,7 @@
 #endif
 
 #define Pi 3.1415926535897932384626433832795
-#define pause system("pause");
+#define pause cout << "Pause at line " << __LINE__ << endl; system("pause"); 
 #define timer timer2 = clock()/CLOCKS_PER_SEC; 	cout << "time (seconds)= " << (timer2 - timer1) << endl;
 #define cudaCheckError() {cudaError_t e = cudaGetLastError();if (e != cudaSuccess) {printf("Cuda failure %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(e)); exit(0);}}
 #define _kernel_ << < gridD, blockD >> >
@@ -52,7 +52,7 @@ double tau_ksi;
 unsigned int size_l;
 size_t size_b, thread_x_d, thread_y_d, thread_z_d;
 double K, bettaT, bettaC, rho, chi, eta, grav, por, Dif, DifHeat, Temp0, Con0, T_cold, T_hot, deltaTemp, dT;
-double rho_por, Cp, Cp_por, nu, D, Dt, Dt_, L, rhoCpF, rhoCpP, Ra, Le, porB, psi, St, St_, a, kappa_p;
+double rho_por, Cp, Cp_por, nu, D, Dt, Dt_, L, rhoCpF, rhoCpP, Ra, Le, porB, psi, St, St_, a, kappa_p, phi;
 int dimensionless = 1, read_recovery, grid_border;
 double coefT, shiftT, coefC, shiftC, Ctotal, Ttotal, Ptotal, StopIncr, minimumTime;
 unsigned long long int *Grid_p, *N_p;
@@ -72,7 +72,7 @@ __device__ double eps_d = 1.0; // psiav_d, psiav0_d = 0.0;
 __device__ double dp;
 __constant__ double K_d, bettaT_d, bettaC_d, rho_d, chi_d, eta_d, grav_d, por_d, Dif_d, DifHeat_d;
 __constant__ double Temp0_d, Con0_d, T_cold_d, T_hot_d, deltaTemp_d, rho_por_d, Cp_d, Cp_por_d, nu_d;
-__constant__ double D_d, Dt_d, rhoCpF_d, rhoCpP_d, Le_d, porB_d, psi_d, St_d, a_d;
+__constant__ double D_d, Dt_d, rhoCpF_d, rhoCpP_d, Le_d, porB_d, psi_d, St_d, a_d, phi_d;
 __device__ double *dx, *dy, *dz;
 
 
@@ -601,6 +601,7 @@ __global__ void hello() {
 	printf("T_cold = %f \n", T_cold_d);
 	printf("Temp0 = %f \n", Temp0_d);
 
+
 	printf("rho = %f \n", rho_d);
 	printf("rho_por = %f \n", rho_por_d);
 	printf("Cp= %f \n", Cp_d);
@@ -610,7 +611,7 @@ __global__ void hello() {
 	printf("Ra = %f \n", Ra_d);
 	printf("Le = %f \n", Le_d);
 	printf("psi = %f \n", psi_d);
-
+	printf("phi = %f \n", phi_d);
 
 	printf("\n");
 }
@@ -1876,6 +1877,7 @@ void setParameters(int argc, char **argv) {
 	File.reading<double>(porB, "porB", 1);
 
 
+	File.reading<double>(phi, "phi", 90); phi = Pi / 180.0 * phi;
 	File.reading<double>(K, "K", 5.66e-10);
 	File.reading<double>(por, "por", 0.48);
 	File.reading<double>(porB, "porB", por);
@@ -2312,7 +2314,7 @@ void copyConstantsGPU() {
 	cudaMemcpyToSymbol(offset, &off, sizeof(unsigned int), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(offset2, &off2, sizeof(unsigned int), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(border_type, &border, sizeof(unsigned int), 0, cudaMemcpyHostToDevice);
-
+	cudaMemcpyToSymbol(phi_d, &phi, sizeof(double), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(K_d, &K, sizeof(double), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(bettaT_d, &bettaT, sizeof(double), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(bettaC_d, &bettaC, sizeof(double), 0, cudaMemcpyHostToDevice);
@@ -2660,7 +2662,7 @@ int main(int argc, char **argv) {
 	float heap_GB = 1.0;
 	size_t limit = (size_t)(1024 * 1024 * 1024 * heap_GB);
 	cudaDeviceSetLimit(cudaLimitMallocHeapSize, limit);
-
+	
 
 	int devID = 0;
 	cudaSetDevice(devID);
@@ -2670,12 +2672,16 @@ int main(int argc, char **argv) {
 	Log << "GPU: " <<  devID << " " << deviceProp.name << endl;
 
 	setParameters(argc, argv); 
+#ifdef BorderMesh
 	grid_near_border(1);
+#endif // BorderMesh
+
+	
 	
 	//bettaC = 0;
 	auxiliarySetup();
 	 
-
+	
 #ifdef level2
 	dim3 gridD(ceil((nx + 1.0) / thread_x_d), ceil((ny + 1.0) / thread_y_d));
 	dim3 blockD(thread_x_d, thread_y_d);
@@ -2690,15 +2696,14 @@ int main(int argc, char **argv) {
 	Poisson_setup();
 	allocationCPU();
 	
-	read_recovery = 0;
-	reading_recover(read_recovery);
+	//read_recovery = 0;
+	reading_recover(read_recovery); 
 	allocationGPU();
-
+	
 	//initial_level(true);
 
 
 //syda_go: // if we reach a state that is considered to be stationary we go to this go-to-mark
-	check
 	write_fields(1, 1, 1, "xy_mid", nz / 2, "nz"); 
 	write_fields(1, 1, 1, "xz_mid", ny / 2, "ny");
 	write_fields(1, 1, 1, "yz_mid", nx / 2, "nx");
@@ -2708,8 +2713,6 @@ next:
 	
 	copyConstantsGPU();
 
-
-	
 
 	hello << <1, 1 >> > ();
 	cudaDeviceSynchronize();
@@ -2727,6 +2730,7 @@ next:
 
 	//pause
 	// the main time loop of the whole calculation procedure
+	Log << "Start of computing: " << get_time();
 	while (true) {
 		copied = 0;
 		//if (timeq > 5000) return 0;
@@ -2737,10 +2741,10 @@ next:
 
 			//quasi_velocity << < gridD, blockD >> > (ux_d, uy_d, uz_d, vx_d, vy_d, vz_d, T_d, T0_d, C_d, C0_d);
 			HeatEquation << < gridD, blockD >> > (vx_d, vy_d, vz_d, T_d, T0_d);
-			//Concentration << < gridD, blockD >> > (vx_d, vy_d, vz_d, T_d, T0_d, C_d, C0_d);
+			Concentration << < gridD, blockD >> > (vx_d, vy_d, vz_d, T_d, T0_d, C_d, C0_d);
 			//Concentration_bc << < gridD, blockD >> > (T0_d, C_d);
 			swap_one << < ceil(size_l / 1024.0), 1024 >> > (T0_d, T_d);
-			//swap_one << < ceil(size_l / 1024.0), 1024 >> > (C0_d, C_d);
+			swap_one << < ceil(size_l / 1024.0), 1024 >> > (C0_d, C_d);
 		}
 
 		//pressure_point << <1,1 >> > (p0_d);
