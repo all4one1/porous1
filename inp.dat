@@ -1,16 +1,44 @@
-incrT = 10
-nx = 30
-ny = 600
+
+
+
+nx = 200
+ny = 200
 nz = 20
-Lx = 0.006
-!Lx = 0.3
-Ly = 0.012
-Lz = 0.006
-tau = 0.02
+Lx = 10
+Ly = 10
+Lz = 1
+tau = 50
+
+
+
+
+
+
+fixed_grad = 2
+
+
+phi = 40
+
+
+
+
 read_recovery = 0
-minimumTime = 100000
+minumumtime = 2000000
+
+
+T_hot = 1000
+T_cold = 0
+!deltaTempFromRa = 10
+
 dimensionless = 0
-StopIncr = 10000
-T_hot = 25
-T_cold = 15
-!Ra = 200
+!Ra = 100
+
+incrT = -50
+StopIncr = 3000
+
+
+
+initial_level = 0
+
+
+!!!

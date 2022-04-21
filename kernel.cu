@@ -1,5 +1,9 @@
-#define level2
-#define NV_YES0
+//define "level2" if use 2D 
+//the additional option is to define "Stream" for 2D to use the stream function formulation
+//define "level3" for 3D
+//"BorderMesh" is more complicated mesh (probably not wholly implemented)
+
+#define level3
 #define Stream
 //#define BorderMesh
 
@@ -30,6 +34,7 @@
 #define TEST cudaDeviceSynchronize(); write_test(); return 0;
 #define VarLog(var) cout << #var << " " << var << endl;
 #define check std::cout << "Line: " << __LINE__ << endl;
+#define center nx / 2 + off * 0 + off2 * nz / 2
 std::ofstream Log("LogFile.dat");
 
 //CPU functions and variables 
@@ -51,9 +56,9 @@ double AMx, AMy, AMz, AMabs, eps_Heav_h;
 double tau_ksi;
 unsigned int size_l;
 size_t size_b, thread_x_d, thread_y_d, thread_z_d;
-double K, bettaT, bettaC, rho, chi, eta, grav, por, Dif, DifHeat, Temp0, Con0, T_cold, T_hot, deltaTemp, dT;
-double rho_por, Cp, Cp_por, nu, D, Dt, Dt_, L, rhoCpF, rhoCpP, Ra, Le, porB, psi, St, St_, a, kappa_p, phi;
-int dimensionless = 1, read_recovery, grid_border;
+double K, bettaT, bettaC, rho, chi, eta, grav, por, Dif, DifHeat, Temp0, Con0, T_cold, T_hot, deltaTemp, gradT0, dT, total_lengh;
+double rho_por, Cp, Cp_por, nu, D, Dt, Dt_, L, rhoCpF, rhoCpP, Ra, Le, porB, psi, St, St_, a, kappa_p, phi, sin_phi, cos_phi;
+int dimensionless = 1, read_recovery, grid_border, fixed_grad;
 double coefT, shiftT, coefC, shiftC, Ctotal, Ttotal, Ptotal, StopIncr, minimumTime;
 unsigned long long int *Grid_p, *N_p;
 unsigned int N_reduce, thread_p;
@@ -70,9 +75,9 @@ __constant__ double eps0_d = 1e-5;
 __constant__ double pi_d = 3.1415926535897932384626433832795;
 __device__ double eps_d = 1.0; // psiav_d, psiav0_d = 0.0;
 __device__ double dp;
-__constant__ double K_d, bettaT_d, bettaC_d, rho_d, chi_d, eta_d, grav_d, por_d, Dif_d, DifHeat_d;
-__constant__ double Temp0_d, Con0_d, T_cold_d, T_hot_d, deltaTemp_d, rho_por_d, Cp_d, Cp_por_d, nu_d;
-__constant__ double D_d, Dt_d, rhoCpF_d, rhoCpP_d, Le_d, porB_d, psi_d, St_d, a_d, phi_d;
+__constant__ double K_d, bettaT_d, bettaC_d, rho_d, chi_d, eta_d, grav_d, por_d, Dif_d, DifHeat_d, total_lengh_d;
+__constant__ double Temp0_d, Con0_d, T_cold_d, T_hot_d, deltaTemp_d, gradT0_d, rho_por_d, Cp_d, Cp_por_d, nu_d;
+__constant__ double D_d, Dt_d, rhoCpF_d, rhoCpP_d, Le_d, porB_d, psi_d, St_d, a_d, phi_d, sin_d, cos_d;
 __device__ double *dx, *dy, *dz;
 
 
@@ -612,6 +617,8 @@ __global__ void hello() {
 	printf("Le = %f \n", Le_d);
 	printf("psi = %f \n", psi_d);
 	printf("phi = %f \n", phi_d);
+	printf("cos = %f \n", cos_d);
+	printf("sin = %f \n", sin_d);
 
 	printf("\n");
 }
@@ -663,295 +670,143 @@ void printParameters() {
 	fclose(pFile);
 }
 
-/*projection method*/
-//__global__ void quasi_velocity(double *ux_d, double *uy_d, double *uz_d, double *vx_d, double *vy_d, double *vz_d, double *T_d, double *T0_d, double *C_d, double *C0_d) {
-//
-//	unsigned int i = threadIdx.x + blockIdx.x*blockDim.x;
-//	unsigned int j = threadIdx.y + blockIdx.y*blockDim.y;
-//	unsigned int k = threadIdx.z + blockIdx.z*blockDim.z;
-//	unsigned int l = i + offset*j + offset2*k;
-//	if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d)
-//	{
-//
-//		/*
-//		INNER
-//		*/
-//		if (i > 0 && i < nx_d && j > 0 && j < ny_d && k > 0 && k < nz_d)
-//		{
-//
-//			//ux_d
-//			ux_d[l] = vx_d[l]
-//				+ tau_d * (
-//#ifdef NV_YES
-//				((-vx_d[l] * dx1(vx_d, l, i) - vy_d[l] * dy1(vx_d, l, j) - vz_d[l] * dz1(vx_d, l, k))/por_d + nu_d * laplace(vx_d, l, i, j, k))
-//#endif
-//
-//
-//					- nu_d / K_d * vx_d[l]  * por_d
-//					);
-//
-//			//uy_d
-//			uy_d[l] = vy_d[l]
-//				+ tau_d  * (
-//#ifdef NV_YES
-//				((-vx_d[l] * dx1(vy_d, l, i) - vy_d[l] * dy1(vy_d, l, j) - vz_d[l] * dz1(vy_d, l, k)) / por_d + nu_d * laplace(vy_d, l, i, j, k))
-//#endif
-//
-//					- nu_d / K_d * vy_d[l] * por_d
-//
-//					+ grav_d*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)) * por_d
-//					);
-//
-//			//uz_d
-//			uz_d[l] = vz_d[l]
-//				+ tau_d * (
-//#ifdef NV_YES
-//				((-vx_d[l] * dx1(vz_d, l, i) - vy_d[l] * dy1(vz_d, l, j) - vz_d[l] * dz1(vz_d, l, k)) / por_d + nu_d * laplace(vz_d, l, i, j, k))
-//#endif
-//
-//
-//					- nu_d / K_d * vz_d[l]  * por_d
-//
-//					);
-//
-//		}
-//
-//		/*
-//		UP-DOWN
-//		*/
-//
-//		// y
-//		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d))
-//		{
-//			uy_d[l] =  tau_d * grav_d*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)) * por_d;
-//#ifdef NV_YES
-//			uy_d[l] += nu_d * tau_d * dy2_up(l, vy_d);
-//#endif
-//			//uy_d[l] = tau_d / hy_d / hy_d*(2.0 * vy_d[l] - 5.0 * vy_d[l + offset] + 4.0 * vy_d[l + offset * 2] - vy_d[l + offset * 3]) + tau_d* Ra_d / Pr_d*(T0_d[l] + C0_d[l]);
-//			//ux_d[l] = tau_d / hy_d / hy_d*(2 * vx_d[l] - 5 * vx_d[l + offset] + 4 * vx_d[l + offset * 2] - vx_d[l + offset * 3]);
-//			//uz_d[l] = tau_d / hz_d / hz_d*(2 * vz_d[l] - 5 * vz_d[l + offset] + 4 * vz_d[l + offset * 2] - vz_d[l + offset * 3]);
-//		}
-//		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))
-//		{
-//			uy_d[l] =  tau_d * grav_d*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)) * por_d;
-//#ifdef NV_YES
-//			uy_d[l] += nu_d * tau_d * dy2_down(l, vy_d);
-//#endif 
-//
-//			//uy_d[l] = tau_d / hy_d / hy_d*(2.0 * vy_d[l] - 5.0 * vy_d[l - offset] + 4.0 * vy_d[l - offset * 2] - vy_d[l - offset * 3]) + tau_d*Ra_d / Pr_d*(T0_d[l] + C0_d[l]);
-//			//ux_d[l] = tau_d / hy_d / hy_d*(2 * vx_d[l] - 5 * vx_d[l - offset] + 4 * vx_d[l - offset * 2] - vx_d[l - offset * 3]);
-//			//uz_d[l] = tau_d / hy_d / hy_d*(2 * vz_d[l] - 5 * vz_d[l - offset] + 4 * vz_d[l - offset * 2] - vz_d[l - offset * 3]);
-//		}
-//
-//		/*
-//		CLOSED
-//		*/
-//
-//		// x
-//		else if (border_type == 0 && i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d))
-//		{
-//			ux_d[l] = 0;  //-tau_d * grav_d*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)) * por_d;
-//#ifdef NV_YES
-//			ux_d[l] += nu_d * tau_d * dx2_forward(l, vx_d);
-//#endif 
-//			//ux_d[l] = tau_d / hx_d / hx_d * (2.0 * vx_d[l] - 5.0 * vx_d[l + 1] + 4.0 * vx_d[l + 2] - vx_d[l + 3]) + tau_d*Ra_d / Pr_d*(T0_d[l] + C10_d[l] + C20_d[l]) * sinA;
-//			//uy_d[l] = tau_d / hx_d / hx_d * (2 * vy_d[l] - 5 * vy_d[l + 1] + 4 * vy_d[l + 2] - vy_d[l + 3]);
-//			//uz_d[l] = tau_d / hx_d / hx_d * (2 * vz_d[l] - 5 * vz_d[l + 1] + 4 * vz_d[l + 2] - vz_d[l + 3]);
-//		}
-//		else if (border_type == 0 && i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))
-//		{
-//			ux_d[l] = 0; // -tau_d * grav_d*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)) * por_d;
-//#ifdef NV_YES
-//			ux_d[l] += nu_d * tau_d * dx2_back(l, vx_d);
-//#endif 
-//			//ux_d[l] = tau_d / hx_d / hx_d * (2.0 * vx_d[l] - 5.0 * vx_d[l - 1] + 4.0 * vx_d[l - 2] - vx_d[l - 3]) + tau_d*Ra_d / Pr_d*(T0_d[l] + C10_d[l] + C20_d[l]) * sinA;
-//			//uy_d[l] = tau_d / hx_d / hx_d * (2 * vy_d[l] - 5 * vy_d[l - 1] + 4 * vy_d[l - 2] - vy_d[l - 3]);
-//			//uz_d[l] = tau_d / hx_d / hx_d * (2 * vz_d[l] - 5 * vz_d[l - 1] + 4 * vz_d[l - 2] - vz_d[l - 3]);
-//		}
-//
-//		// z
-//		else if (border_type == 0 && k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))
-//		{
-//			uz_d[l] = 0; // -tau_d * grav_d*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)) * por_d;
-//#ifdef NV_YES
-//			uz_d[l] += nu_d * tau_d * dz2_toDeep(l, vz_d);
-//#endif 
-//			//ux_d[l] = tau_d / hz_d / hz_d * (2 * vx_d[l] - 5 * vx_d[l + offset2] + 4 * vx_d[l + offset2 * 2] - vx_d[l + offset2 * 3]);
-//			//uy_d[l] = tau_d / hz_d / hz_d * (2 * vy_d[l] - 5 * vy_d[l + offset2] + 4 * vy_d[l + offset2 * 2] - vy_d[l + offset2 * 3]);
-//			//uz_d[l] = tau_d / hz_d / hz_d * (2.0 * vz_d[l] - 5.0 * vz_d[l + offset2] + 4.0 * vz_d[l + offset2 * 2] - vz_d[l + offset2 * 3]);
-//		}
-//		else if (border_type == 0 && k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))
-//		{
-//			uz_d[l] = 0; // -tau_d * grav_d*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)) * por_d;
-//#ifdef NV_YES
-//			uz_d[l] += nu_d * tau_d * dz2_toUs(l, vz_d);
-//#endif 
-//			//ux_d[l] = tau_d / hz_d / hz_d * (2 * vx_d[l] - 5 * vx_d[l - offset2] + 4 * vx_d[l - offset2 * 2] - vx_d[l - offset2 * 3]);
-//			//uy_d[l] = tau_d / hz_d / hz_d * (2 * vy_d[l] - 5 * vy_d[l - offset2] + 4 * vy_d[l - offset2 * 2] - vy_d[l - offset2 * 3]);
-//			//uz_d[l] = tau_d / hz_d / hz_d * (2.0 * vz_d[l] - 5.0 * vz_d[l - offset2] + 4.0 * vz_d[l - offset2 * 2] - vz_d[l - offset2 * 3]);
-//		}
-//
-//		// corner points
-//
-//		else if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d) {
-//			int ii = i + 1 - i / nx_d - ceil(i / (nx_d + 1.0));
-//			int jj = j + 1 - j / ny_d - ceil(j / (ny_d + 1.0));
-//			int kk = k + 1 - k / nz_d - ceil(k / (nz_d + 1.0));
-//
-//			//ux_d[l] = 0;
-//			//uy_d[l] = 0;
-//			//uz_d[l] = 0;
-//
-//			//ux_d[l] = ux_d[ii + offset*jj + offset2*kk];
-//			//uy_d[l] = uy_d[ii + offset*jj + offset2*kk];
-//			//uz_d[l] = uz_d[ii + offset*jj + offset2*kk];
-//		}
-//
-//
-//	}
-//}
-//__global__ void velocity_correction(double *ux_d, double *uy_d, double *uz_d, double *vx_d, double *vy_d, double *vz_d, double *p_d) {
-//
-//
-//	unsigned int i = threadIdx.x + blockIdx.x*blockDim.x;
-//	unsigned int j = threadIdx.y + blockIdx.y*blockDim.y;
-//	unsigned int k = threadIdx.z + blockIdx.z*blockDim.z;
-//	unsigned int l = i + offset*j + offset2*k;
-//
-//	if (border_type == 0 && i <= nx_d && j <= ny_d && k <= nz_d && l < n_d)
-//	{
-//		if (i > 0 && i < nx_d && j > 0 && j < ny_d && k > 0 && k < nz_d)
-//		{
-//			vx_d[l] = ux_d[l] - tau_d / (2.0 * hx_d)*(p_d[l + 1] - p_d[l - 1]) * por_d / rho_d;
-//			vy_d[l] = uy_d[l] - tau_d / (2.0 * hy_d)*(p_d[l + offset] - p_d[l - offset]) * por_d / rho_d;
-//			vz_d[l] = uz_d[l] - tau_d / (2.0 * hz_d)*(p_d[l + offset2] - p_d[l - offset2]) * por_d / rho_d;
-//		}
-//		else if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d) {
-//			vx_d[l] = 0; vy_d[l] = 0; 	vz_d[l] = 0;
-//		}
-//
-//	}
-//
-//
-//	else if (border_type == 1 && i <= nx_d && j <= ny_d && k <= nz_d && l < n_d)
-//	{
-//		if (i > 0 && i < nx_d && j > 0 && j < ny_d && k > 0 && k < nz_d)
-//		{
-//			vx_d[l] = ux_d[l] - tau_d / 2.0 / hx_d*(p_d[l + 1] - p_d[l - 1]);
-//			vy_d[l] = uy_d[l] - tau_d / 2.0 / hy_d*(p_d[l + offset] - p_d[l - offset]);
-//			vz_d[l] = uz_d[l] - tau_d / 2.0 / hz_d*(p_d[l + offset2] - p_d[l - offset2]);
-//		}
-//		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d))
-//		{
-//			vx_d[l] = 0.0; vy_d[l] = 0.0; vz_d[l] = 0.0;
-//		}
-//		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))
-//		{
-//			vx_d[l] = 0.0; vy_d[l] = 0.0; vz_d[l] = 0.0;
-//		}
-//		else if (i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d))
-//		{
-//			int ll = nx_d - 1 + offset*j + offset2*k;
-//			vx_d[l] = ux_d[ll] - tau_d / 2.0 / hx_d*(p_d[ll + 1] - p_d[ll - 1]);
-//			vy_d[l] = uy_d[ll] - tau_d / 2.0 / hy_d*(p_d[ll + offset] - p_d[ll - offset]);
-//			vz_d[l] = uz_d[ll] - tau_d / 2.0 / hz_d*(p_d[ll + offset2] - p_d[ll - offset2]);
-//		}
-//		else if (i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))
-//		{
-//			int ll = 1 + offset*j + offset2*k;
-//			vx_d[l] = ux_d[ll] - tau_d / 2.0 / hx_d*(p_d[ll + 1] - p_d[ll - 1]);
-//			vy_d[l] = uy_d[ll] - tau_d / 2.0 / hy_d*(p_d[ll + offset] - p_d[ll - offset]);
-//			vz_d[l] = uz_d[ll] - tau_d / 2.0 / hz_d*(p_d[ll + offset2] - p_d[ll - offset2]);
-//		}
-//		else if (k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))
-//		{
-//			int ll = i + offset*j + offset2*nz_d - offset2;
-//			vx_d[l] = ux_d[ll] - tau_d / 2.0 / hx_d*(p_d[ll + 1] - p_d[ll - 1]);
-//			vy_d[l] = uy_d[ll] - tau_d / 2.0 / hy_d*(p_d[ll + offset] - p_d[ll - offset]);
-//			vz_d[l] = uz_d[ll] - tau_d / 2.0 / hz_d*(p_d[ll + offset2] - p_d[ll - offset2]);
-//		}
-//		else if (k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))
-//		{
-//			int ll = i + offset*j + offset2;
-//			vx_d[l] = ux_d[ll] - tau_d / 2.0 / hx_d*(p_d[ll + 1] - p_d[ll - 1]);
-//			vy_d[l] = uy_d[ll] - tau_d / 2.0 / hy_d*(p_d[ll + offset] - p_d[ll - offset]);
-//			vz_d[l] = uz_d[ll] - tau_d / 2.0 / hz_d*(p_d[ll + offset2] - p_d[ll - offset2]);
-//		}
-//	}
-//
-//	else if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d) {
-//		int ii = i + 1 - i / nx_d - ceil(i / (nx_d + 1.0));
-//		int jj = j + 1 - j / ny_d - ceil(j / (ny_d + 1.0));
-//		int kk = k + 1 - k / nz_d - ceil(k / (nz_d + 1.0));
-//
-//		vx_d[l] = 0;
-//		vy_d[l] = 0;
-//		vz_d[l] = 0;
-//
-//	}
-//
-//}
-//__global__ void Poisson(double *ux_d, double *uy_d, double *uz_d, double *p_d, double *p0_d)
-//{
-//	//период условие отключено
-//	unsigned int i = threadIdx.x + blockIdx.x*blockDim.x;
-//	unsigned int j = threadIdx.y + blockIdx.y*blockDim.y;
-//	unsigned int k = threadIdx.z + blockIdx.z*blockDim.z;
-//	unsigned int l = i + offset*j + offset2*k;
-//	//double psiav0 = 0.0; double psiav = 0.0; double eps = 1.0; int k = 0;
-//	
-//	/*
-//
-//	closed
-//
-//	*/
-//
-//	if (border_type == 0 && i <= nx_d && j <= ny_d && k <= nz_d && l < n_d)
-//	{
-//		if (i > 0 && i < nx_d && j > 0 && j < ny_d && k > 0 && k < nz_d)
-//		{
-//			p_d[l] =
-//				-(dx1(ux_d, l, i) + dy1(uy_d, l, j) + dz1(uz_d, l, k)) / tau_d * rho_d / por_d;
-//
-//
-//			if (i == 1) 				p_d[l] += 2.0 / 3.0 / hx_d / hx_d*(p0_d[l + 1] - p0_d[l] - hx_d / tau_d*ux_d[l - 1] * rho_d / por_d);
-//			else if (i == nx_d - 1) 	p_d[l] += 2.0 / 3.0 / hx_d / hx_d*(p0_d[l - 1] - p0_d[l] + hx_d / tau_d*ux_d[l + 1] * rho_d / por_d);
-//			else						
-//				p_d[l] += 1.0 / hx_d / hx_d*(p0_d[l + 1] + p0_d[l - 1] - 2.0*p0_d[l]);
-//
-//			if (j == 1)					p_d[l] += 2.0 / 3.0 / hy_d / hy_d*(p0_d[l + offset] - p0_d[l] - hy_d / tau_d*uy_d[l - offset] * rho_d / por_d);
-//			else if (j == ny_d - 1) 	p_d[l] += 2.0 / 3.0 / hy_d / hy_d*(p0_d[l - offset] - p0_d[l] + hy_d / tau_d*uy_d[l + offset] * rho_d / por_d);
-//			else						
-//				p_d[l] += 1.0 / hy_d / hy_d*(p0_d[l + offset] + p0_d[l - offset] - 2.0*p0_d[l]);
-//
-//			if (k == 1)					p_d[l] += 2.0 / 3.0 / hz_d / hz_d*(p0_d[l + offset2] - p0_d[l] - hz_d / tau_d*uz_d[l - offset2] * rho_d / por_d);
-//			else if (k == nz_d - 1)		p_d[l] += 2.0 / 3.0 / hz_d / hz_d*(p0_d[l - offset2] - p0_d[l] + hz_d / tau_d*uz_d[l + offset2] * rho_d / por_d);
-//			else						
-//				p_d[l] += 1.0 / hz_d / hz_d*(p0_d[l + offset2] + p0_d[l - offset2] - 2.0*p0_d[l]);
-//
-//			p_d[l] *= tau_p_d;
-//			p_d[l] += p0_d[l];
-//		}
-//
-//
-//		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d))		p_d[l] = (4.0*p0_d[l + offset] - p0_d[l + offset * 2]) / 3.0 - uy_d[l] * rho_d / por_d * 2.0 * hy_d / tau_d / 3.0;
-//		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))		p_d[l] = (4.0*p0_d[l - offset] - p0_d[l - offset * 2]) / 3.0 + uy_d[l] * rho_d / por_d * 2.0 * hy_d / tau_d / 3.0;
-//		else if (i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d))		p_d[l] = (4.0*p0_d[l + 1] - p0_d[l + 2]) / 3.0 - ux_d[l] * rho_d / por_d * 2.0 * hx_d / tau_d / 3.0;
-//		else if (i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))		p_d[l] = (4.0*p0_d[l - 1] - p0_d[l - 2]) / 3.0 + ux_d[l] * rho_d / por_d * 2.0 * hx_d / tau_d / 3.0;
-//		else if (k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))		p_d[l] = (4.0*p0_d[l + offset2] - p0_d[l + offset2 * 2]) / 3.0 - uz_d[l] * rho_d / por_d * 2.0 * hz_d / tau_d / 3.0;
-//		else if (k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))		p_d[l] = (4.0*p0_d[l - offset2] - p0_d[l - offset2 * 2]) / 3.0 + uz_d[l] * rho_d / por_d * 2.0 * hz_d / tau_d / 3.0;
-//
-//		else if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d) {
-//			int ii = i + 1 - i / nx_d - ceil(i / (nx_d + 1.0));
-//			int jj = j + 1 - j / ny_d - ceil(j / (ny_d + 1.0));
-//			int kk = k + 1 - k / nz_d - ceil(k / (nz_d + 1.0));
-//			p_d[l] = p0_d[ii + offset*jj + offset2*kk];
-//		}
-//	}
-//}
-
 
 #ifdef level3
+__global__ void HeatEquationGradT(double *vx_d, double *vy_d, double *vz_d, double *T_d, double *T0_d) {
+
+
+	unsigned int i = threadIdx.x + blockIdx.x*blockDim.x;
+	unsigned int j = threadIdx.y + blockIdx.y*blockDim.y;
+	unsigned int k = threadIdx.z + blockIdx.z*blockDim.z;
+	unsigned int l = i + offset*j + offset2*k;
+	if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d)
+	{
+
+		/*
+		INNER
+		*/
+		if (i > 0 && i < nx_d && j > 0 && j < ny_d && k > 0 && k < nz_d)
+		{
+
+			//phi
+			T_d[l] = T0_d[l]
+				+ tau_d * (
+					+(-vx_d[l] * dx1(T0_d, l, i)
+						- vy_d[l] * dy1(T0_d, l, j)
+						- vz_d[l] * dz1(T0_d, l, k))*(rhoCpF_d) / (rhoCpP_d)
+
+					+chi_d*laplace(T0_d, l, i, j, k)
+
+					);
+
+		}
+
+
+
+		/*
+		UP-DOWN
+		*/
+		
+		// y
+		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d)) 		T_d[l] = gradT0_d*(k*hz_d*cos_d + j*hy_d*sin_d);
+		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))		T_d[l] = gradT0_d*(k*hz_d*cos_d + j*hy_d*sin_d);
+
+		/*
+		CLOSED
+		*/
+
+		// x
+		else if (border_type == 0 && i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d)) 		T_d[l] = dx1_eq_0_forward(l, T0_d, i);
+		else if (border_type == 0 && i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))		T_d[l] = dx1_eq_0_back(l, T0_d, i);
+
+		// z
+		else if (border_type == 0 && k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))		T_d[l] = gradT0_d*(k*hz_d*cos_d + j*hy_d*sin_d);
+		else if (border_type == 0 && k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))		T_d[l] = gradT0_d*(k*hz_d*cos_d + j*hy_d*sin_d);
+
+																												   // corner points
+
+		else if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d) {
+
+			int ii = i + 1 - i / nx_d - ceil(i / (nx_d + 1.0));
+			int jj = j + 1 - j / ny_d - ceil(j / (ny_d + 1.0));
+			int kk = k + 1 - k / nz_d - ceil(k / (nz_d + 1.0));
+
+			T_d[l] = T0_d[ii + offset*jj + offset2*kk];
+		}
+
+
+	}
+}
+
+__global__ void HeatEquationDisturb(double *vx_d, double *vy_d, double *vz_d, double *T_d, double *T0_d) {
+
+
+	unsigned int i = threadIdx.x + blockIdx.x*blockDim.x;
+	unsigned int j = threadIdx.y + blockIdx.y*blockDim.y;
+	unsigned int k = threadIdx.z + blockIdx.z*blockDim.z;
+	unsigned int l = i + offset*j + offset2*k;
+	if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d)
+	{
+
+		/*
+		INNER
+		*/
+		if (i > 0 && i < nx_d && j > 0 && j < ny_d && k > 0 && k < nz_d)
+		{
+
+			//phi
+			T_d[l] = T0_d[l]
+				+ tau_d * (
+					+(-vx_d[l] * dx1(T0_d, l, i)
+						- vy_d[l] * dy1(T0_d, l, j)
+						- vz_d[l] * dz1(T0_d, l, k))*(rhoCpF_d) / (rhoCpP_d)
+
+					+gradT0_d*(vy_d[l]*sin_d + vz_d[l]*cos_d)*(rhoCpF_d) / (rhoCpP_d)
+
+					+chi_d*laplace(T0_d, l, i, j, k)
+
+					);
+
+		}
+
+
+
+		/*
+		UP-DOWN
+		*/
+
+		// y
+		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d)) 		T_d[l] = 0.0;
+		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))		T_d[l] = 0.0;
+
+		/*
+		CLOSED
+		*/
+
+		// x
+		else if (border_type == 0 && i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d)) 		T_d[l] =  dx1_eq_0_forward(l, T0_d, i);
+		else if (border_type == 0 && i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))		T_d[l] =  dx1_eq_0_back(l, T0_d, i);
+
+		// z
+		else if (border_type == 0 && k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))		T_d[l] = 0.0;
+		else if (border_type == 0 && k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))		T_d[l] = 0.0;
+
+		// corner points
+
+		else if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d) {
+
+			int ii = i + 1 - i / nx_d - ceil(i / (nx_d + 1.0));
+			int jj = j + 1 - j / ny_d - ceil(j / (ny_d + 1.0));
+			int kk = k + 1 - k / nz_d - ceil(k / (nz_d + 1.0));
+
+			T_d[l] = 0.0;
+		}
+
+
+	}
+}
+
+
 __global__ void HeatEquation(double *vx_d, double *vy_d, double *vz_d, double *T_d, double *T0_d) {
 
 
@@ -988,21 +843,22 @@ __global__ void HeatEquation(double *vx_d, double *vy_d, double *vz_d, double *T
 		*/
 
 		// y
-		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d)) 		T_d[l] = dy1_eq_0_up(l, T0_d); // T_hot_d;  //  
-		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))		T_d[l] = dy1_eq_0_down(l, T0_d); //T_cold_d; //   
+		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d)) 		T_d[l] = T_hot_d; // dy1_eq_0_up(l, T0_d, j); // T_hot_d;  //  
+		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))		T_d[l] = T_cold_d; // dy1_eq_0_down(l, T0_d, j); //T_cold_d; //   
 
 																											 /*
 																											 CLOSED
 																											 */
 
 																											 // x
-		else if (border_type == 0 && i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d)) 		T_d[l] = dx1_eq_0_forward(l, T0_d);
-		else if (border_type == 0 && i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))		T_d[l] = dx1_eq_0_back(l, T0_d);
+		else if (i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d)) 		T_d[l] = dx1_eq_0_forward(l, T0_d, i);
+		else if (i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))		T_d[l] = dx1_eq_0_back(l, T0_d, i);
 
 		// z
-		else if (border_type == 0 && k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))		T_d[l] = T_hot_d;  //   dz1_eq_0_toDeep(l, T0_d); //
-		else if (border_type == 0 && k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))		T_d[l] = T_cold_d; // dz1_eq_0_toUs(l, T0_d); //
-
+		//else if (k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))		T_d[l] = T_hot_d - (T_hot_d - T_cold_d) / total_lengh_d *(j*hy_d); // (1.0 - j*hy_d)*deltaTemp_d / total_lengh_d; //dz1_eq_0_toDeep(l, T0_d, k); //
+		//else if (k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))		T_d[l] = T_hot_d - (T_hot_d - T_cold_d) / total_lengh_d *(j*hy_d); //(1.0 - j*hy_d)*deltaTemp_d / total_lengh_d; //dz1_eq_0_toUs(l, T0_d, k); //
+		else if (k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))		T_d[l] = T_hot_d - (T_hot_d - T_cold_d) / total_lengh_d *(j*hy_d); // (1.0 - j*hy_d)*deltaTemp_d / total_lengh_d; //dz1
+		else if (k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))		T_d[l] = T_hot_d - (T_hot_d - T_cold_d) / total_lengh_d *(j*hy_d); //(1.0 - j*hy_d)*deltaTemp_d / total_lengh_d; //
 																												   // corner points
 
 		else if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d) {
@@ -1017,6 +873,8 @@ __global__ void HeatEquation(double *vx_d, double *vy_d, double *vz_d, double *T
 
 	}
 }
+
+
 __global__ void Concentration(double *vx_d, double *vy_d, double *vz_d, double *T_d, double *T0_d, double *C_d, double *C0_d) {
 
 
@@ -1041,7 +899,7 @@ __global__ void Concentration(double *vx_d, double *vy_d, double *vz_d, double *
 					- vz_d[l] * dz1(C0_d, l, k)
 
 					+ (D_d*laplace(C0_d, l, i, j, k) - psi_d * Dt_d*laplace(T0_d, l, i, j, k)) / Le_d
-
+					/*psi = -1 if dimensional*/
 					);
 
 		}
@@ -1053,20 +911,25 @@ __global__ void Concentration(double *vx_d, double *vy_d, double *vz_d, double *
 		*/
 
 		// y
-		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d)) 		C_d[l] = dy1_eq_0_up(l, C0_d);
-		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))		C_d[l] = dy1_eq_0_down(l, C0_d);
+		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d)) 		C_d[l] = dy1_eq_0_up(l, C0_d, j);
+		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))		C_d[l] = dy1_eq_0_down(l, C0_d, j);
 
 		/*
 		CLOSED
 		*/
 
 		// x
-		else if (i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d)) 		C_d[l] = dx1_eq_0_forward(l, C0_d);
-		else if (i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))		C_d[l] = dx1_eq_0_back(l, C0_d);
+		else if (i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d)) 		C_d[l] = dx1_eq_0_forward(l, C0_d, i);
+		else if (i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))		C_d[l] = dx1_eq_0_back(l, C0_d, i);
 
 		// z
 		else if (k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))		C_d[l] = (4.0*C0_d[l + offset2] - C0_d[l + offset2 * 2]) / 3.0 + (psi_d * St_d  * (3.0*T0_d[l] - 4.0*T0_d[l + offset2] + T0_d[l + offset2 * 2])) / 3.0;
 		else if (k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))		C_d[l] = (4.0*C0_d[l - offset2] - C0_d[l - offset2 * 2]) / 3.0 + (psi_d * St_d  * (3.0*T0_d[l] - 4.0*T0_d[l - offset2] + T0_d[l - offset2 * 2])) / 3.0;
+
+		//else if (k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))		C_d[l] = (C0_d[l + offset2]) - psi_d * St_d  * (T0_d[l + offset2] - T0_d[l]);
+		//else if (k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))		C_d[l] = (C0_d[l - offset2]) + psi_d * St_d  * (T0_d[l] - T0_d[l - offset2]);
+
+
 		/*psi = -1 if dimensional*/
 		// corner points
 
@@ -1097,23 +960,24 @@ __global__ void Poisson_Darcy(double *p_d, double *p0_d, double *T0_d, double *C
 	{
 		if (i > 0 && i < nx_d && j > 0 && j < ny_d && k > 0 && k < nz_d)
 		{
-			p_d[l] = -coef*(bettaT_d*dy1_center(l, T0_d) + bettaC_d*dy1_center(l, C0_d));
+			p_d[l] = -(coef*bettaT_d*(dz1(T0_d, l, k)*cos_d + dy1(T0_d, l, j)*sin_d) +
+					 coef*bettaC_d*(dz1(C0_d, l, k)*cos_d + dy1(C0_d, l, j)*sin_d));
 
-			p_d[l] += dx2_center(l, p0_d);
-			p_d[l] += dy2_center(l, p0_d);
-			p_d[l] += dz2_center(l, p0_d);
+			p_d[l] += dx2_center(l, p0_d, i);
+			p_d[l] += dy2_center(l, p0_d, j);
+			p_d[l] += dz2_center(l, p0_d, k);
 
 			p_d[l] *= tau_p_d;
 			p_d[l] += p0_d[l];
 		}
 
 
-		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d))		p_d[l] = (4.0*p0_d[l + offset] - p0_d[l + offset * 2]) / 3.0 - coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hy_d) / 3.0;
-		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))		p_d[l] = (4.0*p0_d[l - offset] - p0_d[l - offset * 2]) / 3.0 + coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hy_d) / 3.0;
-		else if (i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d))		p_d[l] = dx1_eq_0_forward(l, p0_d);
-		else if (i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))		p_d[l] = dx1_eq_0_back(l, p0_d);
-		else if (k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))		p_d[l] = dz1_eq_0_toDeep(l, p0_d);
-		else if (k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))		p_d[l] = dz1_eq_0_toUs(l, p0_d);
+		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d))		p_d[l] = (4.0*p0_d[l + offset] - p0_d[l + offset * 2]) / 3.0 - sin_d*coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hy_d) / 3.0;
+		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))		p_d[l] = (4.0*p0_d[l - offset] - p0_d[l - offset * 2]) / 3.0 + sin_d*coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hy_d) / 3.0;
+		else if (i == 0 && (j > 0 && j < ny_d && k > 0 && k < nz_d))		p_d[l] = dx1_eq_0_forward(l, p0_d, i);
+		else if (i == nx_d && (j > 0 && j < ny_d && k > 0 && k < nz_d))		p_d[l] = dx1_eq_0_back(l, p0_d, i);
+		else if (k == 0 && (i > 0 && i < nx_d && j > 0 && j < ny_d))		p_d[l] = dz1_eq_0_toDeep(l, p0_d, k) - cos_d * coef *(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hz_d) / 3.0;
+		else if (k == nz_d && (i > 0 && i < nx_d && j > 0 && j < ny_d))		p_d[l] = dz1_eq_0_toUs(l, p0_d, k)   + cos_d * coef *(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hz_d) / 3.0;
 
 		else if (i <= nx_d && j <= ny_d && k <= nz_d && l < n_d) {
 			int ii = i + 1 - i / nx_d - ceil(i / (nx_d + 1.0));
@@ -1138,11 +1002,10 @@ __global__ void Velocity_Darcy(double *vx_d, double *vy_d, double *vz_d, double 
 	{
 		if (i > 0 && i < nx_d && j > 0 && j < ny_d && k > 0 && k < nz_d)
 		{
-			vy_d[l] = (-dy1_center(l, p0_d) / rho_d + coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)))* coef2;
-			vx_d[l] = (-dx1_center(l, p0_d) / rho_d) * coef2;
-			vz_d[l] = (-dz1_center(l, p0_d) / rho_d) * coef2;
+			vy_d[l] = (-dy1_center(l, p0_d, i) / rho_d + sin_d*coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)))* coef2;
+			vx_d[l] = (-dx1_center(l, p0_d, j) / rho_d) * coef2;
+			vz_d[l] = (-dz1_center(l, p0_d, k) / rho_d + cos_d*coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d))) * coef2;
 		}
-
 
 		else if (j == 0 && (i > 0 && i < nx_d && k > 0 && k < nz_d))		vy_d[l] = 0;
 		else if (j == ny_d && (i > 0 && i < nx_d && k > 0 && k < nz_d))		vy_d[l] = 0;
@@ -1156,6 +1019,7 @@ __global__ void Velocity_Darcy(double *vx_d, double *vy_d, double *vz_d, double 
 		}
 	}
 }
+
 
 #endif // level3
 
@@ -1266,7 +1130,13 @@ __global__ void Poisson_Darcy(double *ksi, double *ksi0, double *T0_d, double *C
 	{
 		if (i > 0 && i < nx_d && j > 0 && j < ny_d)
 		{
-			ksi[l] = coef*(bettaT_d*dx1(T0_d, l, i) + bettaC_d*dx1(C0_d, l, i));
+			ksi[l] = grav_d * K_d / nu_d *
+				(
+				+bettaT_d * (dx1(T0_d, l, i)*sin_d - dy1(T0_d, l, j)*cos_d)
+				+bettaC_d * (dx1(C0_d, l, i)*sin_d - dy1(C0_d, l, j)*cos_d)
+				);
+			
+			//ksi[l] = coef*(bettaT_d*dx1(T0_d, l, i) + bettaC_d*dx1(C0_d, l, i));
 
 			ksi[l] += dx2(ksi0, l, i);
 			ksi[l] += dy2(ksi0, l, j);
@@ -1328,7 +1198,14 @@ __global__ void Poisson_Darcy(double *p_d, double *p0_d, double *T0_d, double *C
 	{
 		if (i > 0 && i < nx_d && j > 0 && j < ny_d)
 		{
-			p_d[l] = -coef*(bettaT_d*dy1_center(l, T0_d) + bettaC_d*dy1_center(l, C0_d));
+			//p_d[l] = -coef*(bettaT_d*dy1_center(l, T0_d) + bettaC_d*dy1_center(l, C0_d));
+
+			p_d[l] = grav_d * rho_d *
+					(
+					+bettaT_d * (dx1(T0_d, l, i)*cos_d + dy1(T0_d, l, j)*sin_d)
+					+ bettaC_d * (dx1(C0_d, l, i)*cos_d + dy1(C0_d, l, j)*sin_d)
+					);
+
 
 			p_d[l] += dx2_center(l, p0_d);
 			p_d[l] += dy2_center(l, p0_d);
@@ -1354,8 +1231,11 @@ __global__ void Poisson_Darcy(double *p_d, double *p0_d, double *T0_d, double *C
 		}
 
 
-		else if (j == 0 && (i > 0 && i < nx_d))		p_d[l] = (4.0*p0_d[l + offset] - p0_d[l + offset * 2]) / 3.0 -coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hy_d) / 3.0;
-		else if (j == ny_d && (i > 0 && i < nx_d))		p_d[l] = (4.0*p0_d[l - offset] - p0_d[l - offset * 2]) / 3.0 +coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hy_d) / 3.0;
+		//else if (j == 0 && (i > 0 && i < nx_d))			p_d[l] = (4.0*p0_d[l + offset] - p0_d[l + offset * 2]) / 3.0 -coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hy_d) / 3.0;
+		//else if (j == ny_d && (i > 0 && i < nx_d))		p_d[l] = (4.0*p0_d[l - offset] - p0_d[l - offset * 2]) / 3.0 +coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hy_d) / 3.0;
+		else if (j == 0 && (i > 0 && i < nx_d))			p_d[l] = dy1_eq_0_up(l, p0_d)	- sin_d * grav_d * rho_d *(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hy_d) / 3.0;
+		else if (j == ny_d && (i > 0 && i < nx_d))		p_d[l] = dy1_eq_0_down(l, p0_d)	+ sin_d * grav_d * rho_d *(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hy_d) / 3.0;
+
 		//else if (j == 0 && (i > 0 && i < nx_d))		p_d[l] = (p0_d[l + offset]) - coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (hy_d) ;
 		//else if (j == ny_d && (i > 0 && i < nx_d))		p_d[l] = (p0_d[l - offset])  + coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (hy_d) ;
 
@@ -1364,8 +1244,9 @@ __global__ void Poisson_Darcy(double *p_d, double *p0_d, double *T0_d, double *C
 
 
 
-		else if (i == 0 && (j > 0 && j < ny_d))		p_d[l] =  dx1_eq_0_forward(l, p0_d);
-		else if (i == nx_d && (j > 0 && j < ny_d))		p_d[l] = dx1_eq_0_back(l, p0_d);
+
+		else if (i == 0 && (j > 0 && j < ny_d))			p_d[l] =  dx1_eq_0_forward(l, p0_d) - cos_d * grav_d * rho_d *(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hx_d) / 3.0;
+		else if (i == nx_d && (j > 0 && j < ny_d))		p_d[l] =  dx1_eq_0_back(l, p0_d)	+ cos_d * grav_d * rho_d *(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d *(C0_d[l] - Con0_d)) * (2.0 * hx_d) / 3.0;
 
 
 		else if (i <= nx_d && j <= ny_d && l < n_d) {
@@ -1389,8 +1270,10 @@ __global__ void Velocity_Darcy(double *vx_d, double *vy_d, double *vz_d, double 
 	{
 		if (i > 0 && i < nx_d && j > 0 && j < ny_d)
 		{
-			vy_d[l] = (-dy1_center(l, p0_d) / rho_d + coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)))* coef2;
-			vx_d[l] = (-dx1_center(l, p0_d) / rho_d) * coef2;
+			//vy_d[l] = (-dy1_center(l, p0_d) / rho_d + coef*(bettaT_d*(T0_d[l] - Temp0_d) + bettaC_d*(C0_d[l] - Con0_d)))* coef2;
+			//vx_d[l] = (-dx1_center(l, p0_d) / rho_d) * coef2;
+			vy_d[l] = (-dy1_center(l, p0_d) / rho_d + sin_d*(grad_d*bettaT_d*(T0_d[l] - Temp0_d) + grad_d*bettaC_d*(C0_d[l] - Con0_d)))* coef2;
+			vx_d[l] = (-dx1_center(l, p0_d) / rho_d + cos_d*(grad_d*bettaT_d*(T0_d[l] - Temp0_d) + grad_d*bettaC_d*(C0_d[l] - Con0_d)))* coef2;
 		}
 
 
@@ -1753,6 +1636,10 @@ public:
 		open_file(file_name);
 		stat = 0;
 	}
+	ReadingFile()
+	{
+		stat = 0;
+	}
 
 	void open_file(string file_name) {
 		read.open(file_name.c_str());
@@ -1865,10 +1752,11 @@ public:
 
 
 };
+ReadingFile File;
 void setParameters(int argc, char **argv) {
 	string file_name = "inp.dat";
 	if (argc == 2) file_name = argv[1];
-	ReadingFile File(file_name);
+	File.open_file(file_name);
 
 	//porB = Le = Ra = 1; psi = -1;
 	File.reading<double>(Ra, "Ra", 1);
@@ -1877,30 +1765,38 @@ void setParameters(int argc, char **argv) {
 	File.reading<double>(porB, "porB", 1);
 
 
-	File.reading<double>(phi, "phi", 90); phi = Pi / 180.0 * phi;
-	File.reading<double>(K, "K", 5.66e-10);
-	File.reading<double>(por, "por", 0.48);
+	File.reading<double>(phi, "phi", 90); 
+	phi = Pi / 180.0 * phi; sin_phi = sin(phi); cos_phi = cos(phi);
+	File.reading<double>(K, "K", 1.0e-11); 
+	File.reading<double>(por, "por", 0.6);
 	File.reading<double>(porB, "porB", por);
-	File.reading<double>(bettaT, "bettaT", 7.86e-4);
-	File.reading<double>(bettaC, "bettaC", -0.212);
-	File.reading<double>(rho, "rho", 935.17);
-	File.reading<double>(rho_por, "rho_por", 1.0);
-	File.reading<double>(Cp, "Cp", 1.0);
-	File.reading<double>(Cp_por, "Cp_por", 1.0);
-	File.reading<double>(nu,"nu", 2.716e-6);
+	File.reading<double>(bettaT, "bettaT", 3.02e-4);
+	File.reading<double>(bettaC, "bettaC", 0.0);
+	File.reading<double>(rho, "rho", (0.7978e-3) / (7.992e-7));
+	File.reading<double>(rho_por, "rho_por", 2300);
+	File.reading<double>(Cp_por, "Cp_por", 800);
+	File.reading<double>(nu,"nu", 7.992e-7);
 	File.reading<double>(grav, "grav", 9.81);
-	File.reading<double>(D, "D", (4.323e-10)); D = D / 2.30;
-	File.reading<double>(Dt_, "Dt_", (1.37e-12)); Dt_ = Dt_ / 2.27;
+	File.reading<double>(D, "D", (0)); D = D / 2.30;
+	File.reading<double>(Dt_, "Dt_", (0)); Dt_ = Dt_ / 2.27;
 	File.reading<double>(dT, "incrT", 0);
 
 	File.reading<double>(Con0, "Con0", 0.6088);
 	File.reading<double>(Dt, "Dt", Con0*(1.0 - Con0)*Dt_);
+	File.reading<double>(kappa_p, "kappa_p", 0.5);
 
-	File.reading<double>(rhoCpF, "rhoCpF", 3.28e+6);
-	File.reading<double>(rhoCpP, "rhoCpP", 2.51e+6);
-	File.reading<double>(kappa_p, "kappa_p", 0.731);
+
+
+	//File.reading<double>(chi, "chi", 1.437e-7);
+
+
+	File.reading<double>(chi, "chi", kappa_p/rho_por/Cp_por);
+	File.reading<double>(Cp, "Cp", 0.5/chi/rho);
+
+	File.reading<double>(rhoCpF, "rhoCpF", 0.6 / (1.437e-7));
+	File.reading<double>(rhoCpP, "rhoCpP", Cp_por*rho_por);
 	File.reading<double>(a, "a", kappa_p / rhoCpF);
-	File.reading<double>(chi, "chi", kappa_p / rhoCpP);
+
 	File.reading<double>(St_, "St_", Dt_/D);
 	File.reading<double>(St, "St", Con0*(1.0 - Con0)*St_);
 
@@ -1921,19 +1817,20 @@ void setParameters(int argc, char **argv) {
 	File.reading<int>(dimensionless, "dimensionless", 0, 0, 1);
 	File.reading<int>(read_recovery, "read_recovery", 0);
 	File.reading<double>(StopIncr, "StopIncr", 500);
-	File.reading<double>(minimumTime, "minumumTIme", 10000.0);
+	File.reading<double>(minimumTime, "minumumtime", 10000.0);
 	File.reading<int>(grid_border, "grid_border", 0, 0, 1);
+
 
 	//bettaC = 0;
 	//bettaT = -1;
 	//deltaTemp = 10 / (K*grav*bettaT*min3(Lx, Ly, Lz))*nu*(rhoCpP / rhoCpF * chi); 	T_hot = T_cold + deltaTemp;
-	cout << "Ra= " << K*grav*bettaT*min3(Lx, Ly, Lz)*deltaTemp / nu / (a) << endl << endl;
+
 
 	coefT = deltaTemp; shiftT = Temp0;
 	coefC = bettaT / bettaC * deltaTemp; shiftC = Con0;
 
 	
-
+	L = min3(Lx, Ly, Lz);
 	if (dimensionless) { //if dimensionaless
 
 		Le = a / D;
@@ -1962,13 +1859,45 @@ void setParameters(int argc, char **argv) {
 	//hx = Lx / nx; hy = Ly / ny;	hz = Lz / nz;
 	//pause
 
-	Log << " " << endl;
+	File.reading<int>(fixed_grad, "fixed_grad", 0, 0, 2);
+	fixed_grad >= 0 ? File.reading<double>(total_lengh, "total_lengh", abs(Lz*cos_phi) + abs(Ly*sin_phi)) : total_lengh = Lz;
+	
+	//total_lengh = Lz;
+
+	double deltaTempFromRa; File.reading<double>(deltaTempFromRa, "deltaTempFromRa", NAN);
+	if (deltaTempFromRa == deltaTempFromRa) deltaTemp = deltaTempFromRa * nu * chi / K / grav / bettaT / Lz / Lz * total_lengh;
+	File.reading<double>(gradT0, "gradT0", deltaTemp / total_lengh);
+
+	/*
+	int read_grad; File.reading<int>(read_grad, "read_grad", 0, 0, 1);
+	if (read_grad)
+	{
+		File.reading<double>(gradT0, "gradT0", deltaTemp / total_lengh);
+		T_hot = gradT0 * total_lengh;
+		T_cold = Temp0 = 0.0;
+	}
+	*/
+
+	Log << "deltaTemp = " << deltaTemp << endl;
+	double acrtual_Ra = K*grav*bettaT*L*L*gradT0 / nu / (a);
+	double acrtual_Ra2 = K*grav*bettaT*L*L*gradT0 / nu / chi;
+	cout << "Ra= " << acrtual_Ra << " " << acrtual_Ra2 << endl << endl;
+
+	Log << "actual Ra= " << acrtual_Ra << endl;
+	Log << "actual Ra2= " << acrtual_Ra2 << endl;
+
+
+
+
+
 	File.reading<unsigned int>(tt, "tt", 10000);//tt = round(1.0 / tau);
 	File.reading<double>(eps0, "eps0", 1e-5);
 	border = 0; 	//0 is for the closed cavity, 1 is for the periodic one
 	pi = 3.1415926535897932384626433832795;
 	printParameters();
 	
+
+	Log << " " << endl;
 }
 
 
@@ -2024,30 +1953,51 @@ void auxiliarySetup() {
 
 
 }
-void initial_level(bool copy_to_GPU = false) {
+void initial_level(bool copy_to_GPU = false, int type = 0) {
 	double pressure_slope = -0.5*bettaT*grav*deltaTemp*rho; //36.026
 
 
 #ifdef level3
-	for (int i = 0; i <= nx; i++) {
-		for (int j = 0; j <= ny; j++) {
-			for (int k = 0; k <= nz; k++) {
-				//T_h[i + j*off + k*off2] = T_hot - (T_hot - T_cold) / Ly *(j*hy);
 
-				T_h[i + j*off + k*off2] = T_hot - (T_hot - T_cold) / Lz *(k*hz);
-				C_h[i + j*off + k*off2] = Con0;
-				p_h[i + j*off + k*off2] = pressure_slope*k*hz;
+	if (type == 0) {
+		for (int i = 0; i <= nx; i++) {
+			for (int j = 0; j <= ny; j++) {
+				for (int k = 0; k <= nz; k++) {
+					//T_h[i + j*off + k*off2] = T_hot - (T_hot - T_cold) / Ly *(j*hy);
 
+					T_h[i + j*off + k*off2] = T_hot - (T_hot - T_cold) / Lz *(k*hz);
+					C_h[i + j*off + k*off2] = Con0;
+					p_h[i + j*off + k*off2] = pressure_slope*k*hz;
+
+				}
 			}
 		}
 	}
+
+	if (type == 1) {
+		for (int i = 0; i <= nx; i++) {
+			for (int j = 0; j <= ny; j++) {
+				for (int k = 0; k <= nz; k++) {
+					//T_h[i + j*off + k*off2] = T_hot - (T_hot - T_cold) / Ly *(j*hy);
+
+					T_h[i + j*off + k*off2] = T_hot - (T_hot - T_cold) / Lz *(k*hz);
+
+				}
+			}
+		}
+
+	}
+
+
+
+
 #endif // level3
 #ifdef level2
 	
 
 	for (int i = 0; i <= nx; i++) {
 		for (int j = 0; j <= ny; j++) {
-			T_h[i + j*off] = T_hot - (T_hot - T_cold) / Lx *(i*hx);
+			T_h[i + j*off] = Temp0; T_hot - (T_hot - T_cold) / Lx *(i*hx);
 #ifdef BorderMesh
 			T_h[i + j*off] = T_hot - (T_hot - T_cold) / Lx *(XX[i]);
 #endif // BorderMesh
@@ -2064,11 +2014,17 @@ void initial_level(bool copy_to_GPU = false) {
 	}
 #endif 
 	//T_h[nx / 2 + ny / 2 * off + nz / 2 * off2] = T_hot;
-	if (copy_to_GPU) {
+	if (copy_to_GPU)
+	{
 		cudaMemcpy(C0_d, C_h, size_b, cudaMemcpyHostToDevice);		cudaMemcpy(C_d, C_h, size_b, cudaMemcpyHostToDevice);
 		cudaMemcpy(T0_d, T_h, size_b, cudaMemcpyHostToDevice);		cudaMemcpy(T_d, T_h, size_b, cudaMemcpyHostToDevice);
 		cudaMemcpy(p0_d, p_h, size_b, cudaMemcpyHostToDevice);		cudaMemcpy(p_d, p_h, size_b, cudaMemcpyHostToDevice);
+		cudaMemcpy(vx_d, vx_h, size_b, cudaMemcpyHostToDevice);
+		cudaMemcpy(vy_d, vy_h, size_b, cudaMemcpyHostToDevice);
+		cudaMemcpy(vz_d, vz_h, size_b, cudaMemcpyHostToDevice);
 	}
+
+	Log << "initial level used" << endl;
 }
 
 
@@ -2196,7 +2152,7 @@ void reading_recover(int read_fields = 1) {
 				}
 			}
 		}
-		initial_level();
+		//initial_level(); !!!
 		//vy_h[nx / 2 + off * ny / 2 + off2 * nz / 2] = 0.1;
 
 	}
@@ -2315,6 +2271,9 @@ void copyConstantsGPU() {
 	cudaMemcpyToSymbol(offset2, &off2, sizeof(unsigned int), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(border_type, &border, sizeof(unsigned int), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(phi_d, &phi, sizeof(double), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(sin_d, &sin_phi, sizeof(double), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(cos_d, &cos_phi, sizeof(double), 0, cudaMemcpyHostToDevice);
+
 	cudaMemcpyToSymbol(K_d, &K, sizeof(double), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(bettaT_d, &bettaT, sizeof(double), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(bettaC_d, &bettaC, sizeof(double), 0, cudaMemcpyHostToDevice);
@@ -2343,7 +2302,8 @@ void copyConstantsGPU() {
 	cudaMemcpyToSymbol(Le_d, &Le, sizeof(double), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(psi_d, &psi, sizeof(double), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(porB_d, &porB, sizeof(double), 0, cudaMemcpyHostToDevice);
-
+	cudaMemcpyToSymbol(gradT0_d, &gradT0, sizeof(double), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(total_lengh_d, &total_lengh, sizeof(double), 0, cudaMemcpyHostToDevice);
 
 }
 
@@ -2578,7 +2538,19 @@ void copyFromGPU() {
 		copied = 1;
 	}
 }
+void copyToGPU() {
 
+	cudaMemcpy( C0_d,   C_h, size_b, cudaMemcpyHostToDevice);
+	cudaMemcpy( T0_d,   T_h, size_b, cudaMemcpyHostToDevice);
+	cudaMemcpy( p0_d,   p_h, size_b, cudaMemcpyHostToDevice);
+	cudaMemcpy(C_d, C_h, size_b, cudaMemcpyHostToDevice);
+	cudaMemcpy(T_d, T_h, size_b, cudaMemcpyHostToDevice);
+	cudaMemcpy(p_d, p_h, size_b, cudaMemcpyHostToDevice);
+	cudaMemcpy(vx_d, vx_h, size_b, cudaMemcpyHostToDevice);
+	cudaMemcpy(vy_d, vy_h, size_b, cudaMemcpyHostToDevice);
+	cudaMemcpy(vz_d, vz_h, size_b, cudaMemcpyHostToDevice);
+
+}
 void write_test(int val_sec = 0, string section = "") {
 	if (copied == 0) {
 		cudaMemcpy(p_h, p_d, size_b, cudaMemcpyDeviceToHost);
@@ -2672,6 +2644,8 @@ int main(int argc, char **argv) {
 	Log << "GPU: " <<  devID << " " << deviceProp.name << endl;
 
 	setParameters(argc, argv); 
+
+
 #ifdef BorderMesh
 	grid_near_border(1);
 #endif // BorderMesh
@@ -2700,8 +2674,9 @@ int main(int argc, char **argv) {
 	reading_recover(read_recovery); 
 	allocationGPU();
 	
-	//initial_level(true);
 
+	int init_level; File.reading<int>(init_level, "initial_level", 0, 0, 1);
+	if (init_level) initial_level(true);
 
 //syda_go: // if we reach a state that is considered to be stationary we go to this go-to-mark
 	write_fields(1, 1, 1, "xy_mid", nz / 2, "nz"); 
@@ -2728,82 +2703,116 @@ next:
 
 
 
+	//vy_h[center] = 1.0;cudaMemcpy(vy_d, vy_h, size_b, cudaMemcpyHostToDevice);
+	T_h[center] = (T_hot + T_cold)/2; 	
+	
+	for (int i = 0; i <= nx; i++) {
+		for (int j = 0; j <= ny; j++) {
+			for (int k = 0; k <= nz; k++) {
+				//T_h[i + j*off + k*off2] = (T_hot + T_cold)*0.5 - j*hy*gradT0;
+			}
+		}
+	}
+	cudaMemcpy(T0_d, T_h, size_b, cudaMemcpyHostToDevice);
+
+	cudaCheckError();
+	cudaDeviceSynchronize();
+
 	//pause
 	// the main time loop of the whole calculation procedure
-	Log << "Start of computing: " << get_time();
+	Log << "Start of computing: " << get_time() << endl;
 	while (true) {
 		copied = 0;
 		//if (timeq > 5000) return 0;
 		iter = iter + 1; 	timeq = timeq + tau;
 		
-		//1st step, calculating of time evolutionary parts of velocity (quasi-velocity) , temperature and concentration 
+
+
+
+
+		if (true)
 		{
+			//1st step, calculating of time evolutionary parts of velocity (quasi-velocity) , temperature and concentration 
+			
+			if (fixed_grad == 1) {
+				HeatEquationGradT << < gridD, blockD >> > (vx_d, vy_d, vz_d, T_d, T0_d);
+				swap_one << < ceil(size_l / 1024.0), 1024 >> > (T0_d, T_d);
+			} 
+			else if (fixed_grad == 2) {
+				HeatEquationDisturb << < gridD, blockD >> > (vx_d, vy_d, vz_d, T_d, T0_d);
+				swap_one << < ceil(size_l / 1024.0), 1024 >> > (T0_d, T_d);
+			}
 
-			//quasi_velocity << < gridD, blockD >> > (ux_d, uy_d, uz_d, vx_d, vy_d, vz_d, T_d, T0_d, C_d, C0_d);
-			HeatEquation << < gridD, blockD >> > (vx_d, vy_d, vz_d, T_d, T0_d);
-			Concentration << < gridD, blockD >> > (vx_d, vy_d, vz_d, T_d, T0_d, C_d, C0_d);
-			//Concentration_bc << < gridD, blockD >> > (T0_d, C_d);
-			swap_one << < ceil(size_l / 1024.0), 1024 >> > (T0_d, T_d);
-			swap_one << < ceil(size_l / 1024.0), 1024 >> > (C0_d, C_d);
-		}
-
-		//pressure_point << <1,1 >> > (p0_d);
-
-		//pressure_point << <1, 1 >> > (p0_d, nx / 2, ny / 2, 0.0);
-		//2nd step, Poisson equation for pressure 
-		if (iter % 1 == 0)
-		{
-			eps = 1.0; 		psiav0 = 0.0;		psiav = 0.0;		k = 0;
-			while (eps > eps0*psiav0 || k < 2)
+			else
 			{
-				//pressure_norm1 << <1, 1 >> > (p0_d, nx, ny/2);
-				//pressure_norm2 << < gridD, blockD >> > (p0_d);
-				//pressure_point << <1, 1 >> > (p0_d, nx / 2, ny / 2, 1.0);
-				psiav = 0.0;	k++;
-				//Poisson << < gridD, blockD >> > (ux_d, uy_d, uz_d, p_d, p0_d );
-				Poisson_Darcy << < gridD, blockD >> > (p_d, p0_d, T0_d, C0_d);
-				//bc << < gridD, blockD >> > (p_d, T0_d, C0_d);
-				//Poisson_Stream << < gridD, blockD >> > (p_d, p0_d, T0_d, C0_d);
-				//if (timeq > 10) {	swap_one << < ceil(size_l / 1024.0), 1024 >> > (p0_d, p_d); break;}
-				for (int i = 0; i < N_reduce; i++)
-					reduction0 << < Grid_p[i], 1024, 1024 * sizeof(double) >> > (arr[i], N_p[i], arr[i + 1]);
 
-				swap_one << < ceil(size_l / 1024.0), 1024 >> > (p0_d, p_d);
-				cudaMemcpy(&psiav, psiav_array, sizeof(double), cudaMemcpyDeviceToHost);
-				eps = abs(psiav - psiav0);		psiav0 = psiav;
-
-				if (k % 1000 == 0) {
-					cudaMemcpy(p_h, p_d, size_b, cudaMemcpyDeviceToHost);
-					cout << k << "  " << setprecision(15) << p_h[1 + off] - p_h[nx - 1 + off*(ny - 1)] << " " << eps << endl;
-				}
+				HeatEquation << < gridD, blockD >> > (vx_d, vy_d, vz_d, T_d, T0_d);
+				//Concentration << < gridD, blockD >> > (vx_d, vy_d, vz_d, T_d, T0_d, C_d, C0_d);
+				//swap_one << < ceil(size_l / 1024.0), 1024 >> > (C0_d, C_d);
+				//Concentration_bc << < gridD, blockD >> > (T0_d, C_d);
+				swap_one << < ceil(size_l / 1024.0), 1024 >> > (T0_d, T_d);
 
 			}
 
+			//pressure_point << <1,1 >> > (p0_d);
+
+			//pressure_point << <1, 1 >> > (p0_d, nx / 2, ny / 2, 0.0);
+			//2nd step, Poisson equation for pressure 
+			if (iter % 1 == 0)
+			{
+				eps = 1.0; 		psiav0 = 0.0;		psiav = 0.0;		k = 0;
+				while (eps > eps0*psiav0 || k < 2)
+				{
+					//pressure_norm1 << <1, 1 >> > (p0_d, nx, ny/2);
+					//pressure_norm2 << < gridD, blockD >> > (p0_d);
+					//pressure_point << <1, 1 >> > (p0_d, nx / 2, ny / 2, 1.0);
+					psiav = 0.0;	k++;
+					//Poisson << < gridD, blockD >> > (ux_d, uy_d, uz_d, p_d, p0_d );
+					Poisson_Darcy << < gridD, blockD >> > (p_d, p0_d, T0_d, C0_d);
+					//bc << < gridD, blockD >> > (p_d, T0_d, C0_d);
+					//Poisson_Stream << < gridD, blockD >> > (p_d, p0_d, T0_d, C0_d);
+					//if (timeq > 10) {	swap_one << < ceil(size_l / 1024.0), 1024 >> > (p0_d, p_d); break;}
+					for (int i = 0; i < N_reduce; i++)
+						reduction0 << < Grid_p[i], 1024, 1024 * sizeof(double) >> > (arr[i], N_p[i], arr[i + 1]);
+
+					swap_one << < ceil(size_l / 1024.0), 1024 >> > (p0_d, p_d);
+					cudaMemcpy(&psiav, psiav_array, sizeof(double), cudaMemcpyDeviceToHost);
+					eps = abs(psiav - psiav0);		psiav0 = psiav;
+
+					if (k % 1000 == 0) {
+						cudaMemcpy(p_h, p_d, size_b, cudaMemcpyDeviceToHost);
+						cout << k << "  " << setprecision(15) << p_h[1 + off] - p_h[nx - 1 + off*(ny - 1)] << " " << eps << endl;
+					}
+
+				}
+
+			}
+			Velocity_Darcy << < gridD, blockD >> > (vx_d, vy_d, vz_d, p0_d, T0_d, C0_d);
+			//Velocity_Stream << < gridD, blockD >> > (vx_d, vy_d, vz_d, p0_d, T0_d, C0_d);
+			//3
+			//velocity_correction << < gridD, blockD >> > (ux_d, uy_d, uz_d, vx_d, vy_d, vz_d, p_d);
+			//swap_5 << < ceil(size_l / 1024.0), 1024 >> >(ux_d, vx_d, uy_d, vy_d, uz_d, vz_d, C0_d, C_d, T0_d, T_d);
+			//TEST		
+
 		}
-		Velocity_Darcy << < gridD, blockD >> > (vx_d, vy_d, vz_d, p0_d, T0_d, C0_d);
-		//Velocity_Stream << < gridD, blockD >> > (vx_d, vy_d, vz_d, p0_d, T0_d, C0_d);
-		//3
-		//velocity_correction << < gridD, blockD >> > (ux_d, uy_d, uz_d, vx_d, vy_d, vz_d, p_d);
-		//swap_5 << < ceil(size_l / 1024.0), 1024 >> >(ux_d, vx_d, uy_d, vy_d, uz_d, vz_d, C0_d, C_d, T0_d, T_d);
-		//TEST		
 
 
 
 
 
-		//4 
 
 
 
 
-		//cout << "Hello" << endl;
-		//TEST
+
 
 			//4
 #ifdef level3
 
-		if (iter % (int)(tt * 1.0) == 0 || iter == 1 /*|| (iter % 100 == 0)*/) {
+		if (iter % (int)(tt * 1.0) == 0 || iter <= 1 /*|| (iter % 100 == 0)*/) {
 			//write_test();
+
+			double Tmax, Tmin;
 
 			cout << setprecision(15) << endl;
 			cout << fixed << endl;
@@ -2830,50 +2839,65 @@ next:
 			cout << "dEk/Ek= " << abs(Ek - Ek_old) / Ek << endl;
 			dCmax0 = dCmax;  dCmax = max_vertical_difference(C_h);
 			dTmax0 = dTmax;  dTmax = max_vertical_difference(T_h);
+
 			cout << "max_dT= " << dTmax << endl;
 			cout << "max_dC= " << dCmax << endl;
+			cout << "Tc= " << T_h[nx / 2 + off * ny / 2 + off2 * nz / 2] << endl;
+			Tmax = maxval(T_h, size_l);
+			Tmin = minval(T_h, size_l);
+			cout << "Tmax= " << Tmax << endl;
+			cout << "Tmin= " << Tmin << endl;
+
 			cout << setprecision(7) << "t=" << timeq << endl;
 			timer
-
 
 				if (iter == 1)
 				{
 					integrals << "t, Ek, Vmax,  time(min), Vc,  dEk, dTmax, dCmax"
-						<< ", NuFront, NuBack"
-						<< ", NuDown, NuTop"
-						<< ", ShFront, ShBack"
-						<< ", ShDown, ShTop"
+						<< ", Cy0, CyNy, Tmax, Tmin"
+						//<< ", NuFront, NuBack"
+						//<< ", NuDown, NuTop"
+						//<< ", ShFront, ShBack"
+						//<< ", ShDown, ShTop"
 						<< " " << Ra*deltaTemp
 						<< endl;
 				}
-
+			
 			integrals << setprecision(20) << fixed;
 			integrals << tau*iter << " " << Ek << " " << Vmax << " " << (timer2 - timer1) / 60 << " " << vy_h[nx / 2 + off * ny / 2 + off2 * nz / 2] << " " << (Ek - Ek_old) << " "
 				//<< Nu_y_top(T_h) << " " << Nu_y_down(T_h) << " " << Nu_x_left(T_h) << " " << Nu_x_right(T_h) 
 				<< dTmax << " " << dCmax
-				<< " " << Nu_z_front(T_h) << " " << Nu_z_back(T_h)
-				<< " " << Nu_y_down(T_h) << " " << Nu_y_top(T_h)
+				<< " " << C_h[nx / 2 + off * 0 + off2 * nz / 2] << " " << C_h[0 + off * ny + off2 * nz / 2]
+				<< " " << Tmax
+				<< " " << Tmin
+				//<< " " << Nu_z_front(T_h) << " " << Nu_z_back(T_h)
+				//<< " " << Nu_y_down(T_h) << " " << Nu_y_top(T_h)
 
-				<< " " << Nu_z_front(C_h) << " " << Nu_z_back(C_h)
-				<< " " << Nu_y_down(C_h) << " " << Nu_y_top(C_h)
+				//<< " " << Nu_z_front(C_h) << " " << Nu_z_back(C_h)
+				//<< " " << Nu_y_down(C_h) << " " << Nu_y_top(C_h)
 				<< endl;
 
 			//printf("%30.25f \n", Ek); pause
-
+			
 
 			if (1)
-				if (timeq > minimumTime && abs(Ek - Ek_old) / Ek < 1e-7 && (dCmax - dCmax0) / dCmax < 1e-8) {
+				//if (timeq > minimumTime && abs(Ek - Ek_old) / Ek < 1e-7 && (dCmax - dCmax0) / dCmax < 1e-8) 
+				if (timeq > minimumTime && (abs(Ek - Ek_old) / Ek < 1e-7 || abs(Ek - Ek_old) < 1e-20))
+			    {
 					Ra_tab << Ra*deltaTemp << " " << Ek << " " << Vmax << " " << dCmax << " " << Ctotal << " " << (timer2 - timer1) / 60 << " " << timeq
+						<< " " << K*grav*bettaT*Lz*Lz*gradT0 / nu / a << " " << K*grav*bettaT*Lz*Lz*gradT0 / nu / chi
 						<< endl;
 					next_to = 1;
 				}
 
 
-			if (Ek != Ek) exit(0);
-			if (Ra*deltaTemp > 1000) exit(0);
+			if (Ek != Ek) exit(0); 
+			if (Ra*deltaTemp > 10000) exit(0);
+			if (Ra*deltaTemp <= 0) exit(0);
+			
 		}
 
-		if (iter % (int)(tt * 0.5) == 0 || iter == 1 || next_to == 1) {
+		if (iter % (int)(tt * 5) == 0 || iter == 1 || next_to == 1) {
 			if (dimensionless) {
 				transform(C_h, C_h, coefC, shiftC);
 				transform(T_h, T_h, coefT, shiftT);
@@ -2889,15 +2913,21 @@ next:
 				timeq = 0;
 				if (dimensionless) {
 					Ra += dT;
+					Log << "Heat: " << Ra << endl;
 				}
 				else {
 					T_hot += dT;
 					deltaTemp = T_hot - T_cold;
+					gradT0 = deltaTemp / total_lengh;
+					Log << "Heat: " << deltaTemp << endl;
 				}
+				
 				goto next;
 			}
 		}
-		if (next_to == 1) {
+		if (next_to == 1) {//wtf?
+			cout << "here?" << endl;
+			pause
 				write_fields(1, 1, 1, "F_all", nz / 2, "nz");
 				write_fields(1, 1, 1, "F_section", nx / 2, "nx");
 				next_to = 0;
@@ -3013,12 +3043,10 @@ next:
 
 
 
-
-
 	} //the end of the main loop
 
 
-
+	cout << "GIT ALLO" << endl;
 	return 0;
 }
 
